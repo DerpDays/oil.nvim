@@ -433,16 +433,47 @@ M.is_modifiable = function(bufnr)
   end
 
   local uid = uv.getuid()
-  local gid = uv.getgid()
   local rwx
   if uid == stat.uid then
     rwx = bit.rshift(stat.mode, 6)
-  elseif gid == stat.gid then
+  elseif M.in_unix_group(stat.gid) then
     rwx = bit.rshift(stat.mode, 3)
   else
     rwx = stat.mode
   end
   return bit.band(rwx, 2) ~= 0
+end
+
+---@param gid integer
+---@return boolean
+M.in_unix_group = function(gid)
+  local username = uv.os_get_passwd()["username"]
+  local fd = uv.fs_open("/etc/group", "r", 0644)
+  local stat = assert(uv.fs_fstat(fd))
+  local data = assert(uv.fs_read(fd, stat.size - 1, 0))
+  local groups = vim.gsplit(data, "\n", { plain = true })
+  assert(vim.uv.fs_close(fd))
+  for line in groups do
+    local count = 0
+    -- format: groupname:passwd:gid:username1,username2,...
+    for atom in vim.gsplit(line, ":", { plain = true }) do
+      count = count + 1
+      -- Check if the line corresponds to the file/directory gid
+      if count == 3 and tonumber(atom) ~= gid then
+        break
+      -- If it does correspond, check if the username is in the group
+      elseif count > 3 and atom == username then
+        return true
+      end
+    end
+    -- if we went past 3, then we found the relevant group, but the user
+    -- wasn't part of it
+    if count > 3 then
+      return false
+    end
+  end
+  -- unreachable: gid not found in /etc/group
+  return false
 end
 
 ---@param action oil.Action
